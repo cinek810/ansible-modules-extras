@@ -377,7 +377,7 @@ def main():
             state=dict(default="present", choices=['present', 'absent']),
             timeout=dict(type='int', default=10),
             interfaces=dict(required=False),
-            force=dict(default='yes', choices='bool'),
+            force=dict(default='yes', choices=BOOLEANS),
             proxy=dict(required=False)
         ),
         supports_check_mode=True
