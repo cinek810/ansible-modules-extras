@@ -93,11 +93,20 @@ options:
         default: []
     force:
         description:
-            - Overwrite the host configuration, even if already present
+            - Run the task even if host already present. If clear: yes (the default) is specified the current values are overwritten,
+              if clear : no specified templates and groups are added to currently configured in zabbix.
         required: false
         default: "yes"
         choices: [ "yes", "no" ]
         version_added: "2.0"
+     clear:
+        description:
+            - If equal to yes groups and linked templates are cleared and after the tash they are exactly equal to the 
+              paramaters specified, otherwise groups and templates are added to current state in zabbix.
+        required: false
+        default: "yes"
+        choices: [ "yes" ,"no" ]
+        version_added: "2.2"
 '''
 
 EXAMPLES = '''
@@ -199,10 +208,20 @@ class Host(object):
         except Exception, e:
             self._module.fail_json(msg="Failed to create host %s: %s" % (host_name, e))
 
-    def update_host(self, host_name, group_ids, status, host_id, interfaces, exist_interface_list, proxy_id):
+    def update_host(self, host_name, group_ids, status, host_id, interfaces, exist_interface_list, proxy_id,clear):
         try:
             if self._module.check_mode:
                 self._module.exit_json(changed=True)
+	    
+            # get the existing host's groups
+
+	    if not clear: 
+             exist_host_groups_ids = self.get_group_ids_by_group_names(self.get_host_groups_by_host_id(host_id))
+             for group_id in exist_host_groups_ids:
+		if group_id not in group_ids:
+			group_ids.append(group_id )
+	    
+	
             parameters = {'hostid': host_id, 'groups': group_ids, 'status': status, 'proxy_hostid': proxy_id}
             self._zapi.host.update(parameters)
             interface_list_copy = exist_interface_list
@@ -285,7 +304,7 @@ class Host(object):
             for host_groups_name in host_groups_list:
                 exist_host_groups.append(host_groups_name['name'])
         return exist_host_groups
-
+  
     # check the exist_interfaces whether it equals the interfaces or not
     def check_interface_properties(self, exist_interface_list, interfaces):
         interfaces_port_list = []
@@ -344,18 +363,26 @@ class Host(object):
         return False
 
     # link or clear template of the host
-    def link_or_clear_template(self, host_id, template_id_list):
+    def link_or_clear_template(self, host_id, template_id_list,clear):
         # get host's exist template ids
         exist_template_id_list = self.get_host_templates_by_host_id(host_id)
+	
+	exist_template_ids = set(exist_template_id_list)
+	template_ids = set(template_id_list)
 
-        exist_template_ids = set(exist_template_id_list)
-        template_ids = set(template_id_list)
-        template_id_list = list(template_ids)
+	if clear:
+		# get unlink and clear templates
+		templates_clear = exist_template_ids.difference(template_ids)
+		templates_clear_list = list(templates_clear)
+	        template_id_list = list(template_ids)
+		request_str = {'hostid': host_id, 'templates': template_id_list, 'templates_clear': templates_clear_list}
+	else:
+                template_ids= exist_template_ids.union( template_ids)
+                template_id_list= list(template_ids) 
+                request_str = {'hostid': host_id, 'templates': template_id_list}
 
-        # get unlink and clear templates
-        templates_clear = exist_template_ids.difference(template_ids)
-        templates_clear_list = list(templates_clear)
-        request_str = {'hostid': host_id, 'templates': template_id_list, 'templates_clear': templates_clear_list}
+#	self._module.fail_json(msg="was:%s" % request_str)
+	
         try:
             if self._module.check_mode:
                 self._module.exit_json(changed=True)
@@ -377,7 +404,8 @@ def main():
             state=dict(default="present", choices=['present', 'absent']),
             timeout=dict(type='int', default=10),
             interfaces=dict(required=False),
-            force=dict(default='yes', choices='bool'),
+            force=dict(default=True, type='bool'),
+            clear=dict(default=True, type='bool'),
             proxy=dict(required=False)
         ),
         supports_check_mode=True
@@ -397,6 +425,7 @@ def main():
     timeout = module.params['timeout']
     interfaces = module.params['interfaces']
     force = module.params['force']
+    clear = module.params['clear']
     proxy = module.params['proxy']
 
     # convert enabled to 0; disabled to 1
@@ -456,29 +485,17 @@ def main():
             exist_interfaces_copy = copy.deepcopy(exist_interfaces)
 
             # update host
-            interfaces_len = len(interfaces) if interfaces else 0
-
-            if len(exist_interfaces) > interfaces_len:
-                if host.check_all_properties(host_id, host_groups, status, interfaces, template_ids,
+            if host.check_all_properties(host_id, host_groups, status, interfaces, template_ids,
                                              exist_interfaces, zabbix_host_obj, proxy_id):
-                    host.link_or_clear_template(host_id, template_ids)
+                    host.link_or_clear_template(host_id, template_ids,clear)
                     host.update_host(host_name, group_ids, status, host_id,
-                                     interfaces, exist_interfaces, proxy_id)
+                                     interfaces, exist_interfaces, proxy_id,clear)
                     module.exit_json(changed=True,
                                      result="Successfully update host %s (%s) and linked with template '%s'"
                                      % (host_name, ip, link_templates))
-                else:
-                    module.exit_json(changed=False)
             else:
-                if host.check_all_properties(host_id, host_groups, status, interfaces, template_ids,
-                                             exist_interfaces_copy, zabbix_host_obj, proxy_id):
-                    host.update_host(host_name, group_ids, status, host_id, interfaces, exist_interfaces, proxy_id)
-                    host.link_or_clear_template(host_id, template_ids)
-                    module.exit_json(changed=True,
-                                     result="Successfully update host %s (%s) and linked with template '%s'"
-                                     % (host_name, ip, link_templates))
-                else:
                     module.exit_json(changed=False)
+
     else:
         if not group_ids:
             module.fail_json(msg="Specify at least one group for creating host '%s'." % host_name)
