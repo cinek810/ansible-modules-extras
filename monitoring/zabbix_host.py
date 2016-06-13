@@ -214,7 +214,6 @@ class Host(object):
                 self._module.exit_json(changed=True)
 	    
             # get the existing host's groups
-
 	    if not clear: 
              exist_host_groups_ids = self.get_group_ids_by_group_names(self.get_host_groups_by_host_id(host_id))
              for group_id in exist_host_groups_ids:
